@@ -27,8 +27,8 @@ Rodar manualmente sem argumentos executa o backup. O destino do upload é o driv
 
 - Antes de gerar qualquer backup, valida se `docker` e `pbackup` estão instalados, se `bin/uoe.env` está preenchido, se os containers `redis`/`mongodb` estão rodando e respondem a um `PING` (Redis) / `ping` (Mongo).
 - **Redis**: `docker exec redis redis-cli SAVE`, copia o `dump.rdb` gerado (via bind mount em `/var/lib/redis/data/dump.rdb`) com nome timestampado.
-- **MongoDB**: `docker exec mongodb mongodump --archive --gzip`, autenticando com `MONGO_USER`/`MONGO_PASS`. Gera um arquivo único `.gz` por execução (sem acumular diretório de dump entre execuções).
-- Faz upload de ambos os arquivos via `pbackup --files -t "$UOE_URL" --token "$UOE_TOKEN"` (drive UOE) e limpa o staging local (`bin/tmp/`, criado e removido a cada execução) após o envio.
+- **MongoDB**: `docker exec mongodb mongodump --out <dir>`, autenticando com `MONGO_USER`/`MONGO_PASS`. Gera um diretório com nome timestampado por execução (nunca reaproveita nome, evita dado velho misturado com o novo).
+- Faz upload via `pbackup --files -t "$UOE_URL" --token "$UOE_TOKEN" -a -C "$MONGO_SPLIT_SIZE"` (drive UOE): `-a` autocompacta o diretório do Mongo em zip e `-C 300M` quebra em partes de até 300MB (a UOE rejeita upload único grande demais, HTTP 400 "request file too large"). Limpa o staging local (`bin/tmp/`, criado e removido a cada execução) após o envio.
 - Notifica um webhook do Discord no início, no fim (sucesso) e em qualquer erro (via `trap ... EXIT`, cobre até falhas na validação).
 
 ### Requisitos
