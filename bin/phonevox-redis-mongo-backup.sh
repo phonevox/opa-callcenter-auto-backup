@@ -251,7 +251,7 @@ function validations () {
     fi
 
     log.trace "Pinging MongoDB..."
-    if ! docker exec "$MONGO_CONTAINER" mongosh --quiet --eval "db.runCommand({ping:1}).ok" \
+    if ! docker exec "$MONGO_CONTAINER" mongo --quiet --eval "db.runCommand({ping:1}).ok" \
         -u "$MONGO_USER" -p "$MONGO_PASS" --authenticationDatabase "$MONGO_AUTH_DB" 2>/dev/null | grep -q "^1$"; then
         log.fatal "ERROR: MongoDB did not respond to ping. Exiting..."
         exit 1

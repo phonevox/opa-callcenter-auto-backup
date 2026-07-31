@@ -33,7 +33,7 @@ Rodar manualmente sem argumentos executa o backup. O destino do upload é o driv
 
 ### Requisitos
 
-- `docker` instalado, containers `redis` e `mongodb` rodando (o Mongo precisa ter `mongosh` disponível dentro do container, usado no health check).
+- `docker` instalado, containers `redis` e `mongodb` rodando (o Mongo precisa ter o `mongo` shell disponível dentro do container, usado no health check).
 - `pbackup` e `rclone` instalados.
 - Arquivos de credenciais do Mongo e do UOE preenchidos (veja abaixo).
 - `curl` instalado (usado para notificar o Discord).
