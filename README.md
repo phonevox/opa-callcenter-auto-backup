@@ -28,7 +28,7 @@ Rodar manualmente sem argumentos executa o backup. O destino do upload é o driv
 - Antes de gerar qualquer backup, valida se `docker` e `pbackup` estão instalados, se `bin/uoe.env` está preenchido, se os containers `redis`/`mongodb` estão rodando e respondem a um `PING` (Redis) / `ping` (Mongo).
 - **Redis**: `docker exec redis redis-cli SAVE`, copia o `dump.rdb` gerado (via bind mount em `/var/lib/redis/data/dump.rdb`) com nome timestampado.
 - **MongoDB**: `docker exec mongodb mongodump --archive --gzip`, autenticando com `MONGO_USER`/`MONGO_PASS`. Gera um arquivo único `.gz` por execução, depois quebra ele em partes de `$MONGO_SPLIT_SIZE` (300M) com `split -b` antes de subir - a UOE rejeita upload único grande demais (HTTP 400 "request file too large"). Usamos `split` (corte de bytes, sem recompressão) em vez do `-a`/`-C` nativo do `pbackup`, porque aquele autocompacta com `tar`+`zip` single-thread e é lento demais pra dumps grandes (trava 1 core por horas).
-- Faz upload de todas as partes via `pbackup --files -t "$UOE_URL" --token "$UOE_TOKEN"` (drive UOE) e limpa o staging local (`bin/tmp/`, criado e removido a cada execução) após o envio.
+- Faz upload de todas as partes via `pbackup --files -t "$UOE_URL" --token "$UOE_TOKEN"` (drive UOE), organizado por data no remoto via os placeholders nativos do pbackup (`/redis/%YEAR%/%MONTH%/%DAY%` e `/mongodb/%YEAR%/%MONTH%/%DAY%`), e limpa o staging local (`bin/tmp/`, criado e removido a cada execução) após o envio.
 - Notifica um webhook do Discord no início, no fim (sucesso) e em qualquer erro (via `trap ... EXIT`, cobre até falhas na validação).
 
 ### Requisitos
@@ -71,7 +71,7 @@ Isso faz o git ignorar futuras alterações de conteúdo desses arquivos especí
 O backup do Redis sobe como um único arquivo (`.rdb`), sem segredo pra restaurar. O do MongoDB sobe **em partes** (`mongobackup-<timestamp>.archive.gz.part.000`, `.part.001`, ...) - precisa juntar antes de restaurar:
 
 ```bash
-# 1. baixe todas as partes de /mongodb pro mesmo diretório local
+# 1. baixe todas as partes de /mongodb/<ano>/<mes>/<dia>/ pro mesmo diretório local
 
 # 2. reconstrua o .gz original (a ordem importa - os sufixos numéricos garantem isso com o wildcard)
 cat mongobackup-<timestamp>.archive.gz.part.* > mongobackup-<timestamp>.archive.gz

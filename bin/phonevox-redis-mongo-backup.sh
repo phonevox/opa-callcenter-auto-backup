@@ -102,6 +102,7 @@ function load_discord_webhook() {
 function discord_notify() {
     local message="$1"
     local color="${2:-3447003}" # blue (default), green=3066993, red=15158332
+    local fields="${3:-[]}" # JSON array string: [{"name":"..","value":"..","inline":true}]
 
     if [ -z "$DISCORD_WEBHOOK_URL" ]; then
         return 0
@@ -110,18 +111,32 @@ function discord_notify() {
     local escaped="${message//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
 
+    local timestamp
+    timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
     curl -sS -m 10 -H "Content-Type: application/json" \
-        -d "{\"embeds\":[{\"title\":\"$SCRIPT_NAME\",\"description\":\"$escaped ($(hostname))\",\"color\":$color}]}" \
+        -d "{\"embeds\":[{\"title\":\"$SCRIPT_NAME\",\"description\":\"$escaped\",\"color\":$color,\"fields\":$fields,\"footer\":{\"text\":\"$(hostname)\"},\"timestamp\":\"$timestamp\"}]}" \
         "$DISCORD_WEBHOOK_URL" > /dev/null 2>&1 \
         || log.warn "WARNING: Failed to send Discord notification."
 }
 
 function discord_report_exit() {
     local code="$1"
+    local finished_at
+    finished_at="$(TZ="$_LOG_TZ" date '+%Y-%m-%d %H:%M:%S')"
+
+    local duration="?"
+    if [ -n "$_BACKUP_START_TS" ]; then
+        local elapsed=$(( $(date +%s) - _BACKUP_START_TS ))
+        duration="$(printf '%dm%02ds' $((elapsed / 60)) $((elapsed % 60)))"
+    fi
+
+    local fields="[{\"name\":\"Started at\",\"value\":\"$_BACKUP_START_LOCAL\",\"inline\":true},{\"name\":\"Finished at\",\"value\":\"$finished_at\",\"inline\":true},{\"name\":\"Duration\",\"value\":\"$duration\",\"inline\":true}]"
+
     if [ "$code" -eq 0 ]; then
-        discord_notify "✅ Backup finished successfully." 3066993
+        discord_notify "✅ Backup finished successfully." 3066993 "$fields"
     else
-        discord_notify "❌ Backup failed (exit code $code). Check $_LOG_FILE." 15158332
+        discord_notify "❌ Backup failed (exit code $code). Check $_LOG_FILE." 15158332 "$fields"
     fi
 }
 
@@ -290,17 +305,19 @@ function main () {
     load_discord_webhook
     trap 'discord_report_exit $?' EXIT
 
-    discord_notify "🟡 Backup started."
+    _BACKUP_START_TS=$(date +%s)
+    _BACKUP_START_LOCAL="$(TZ="$_LOG_TZ" date '+%Y-%m-%d %H:%M:%S')"
+    discord_notify "🟡 Backup started." 3447003 "[{\"name\":\"Started at\",\"value\":\"$_BACKUP_START_LOCAL\",\"inline\":true}]"
 
     validations
 
     generate_redis_backup
     generate_mongo_backup
 
-    FILES="$BACKUP_DIR/$REDIS_BACKUP_FILE:/redis"
+    FILES="$BACKUP_DIR/$REDIS_BACKUP_FILE:/redis/%YEAR%/%MONTH%/%DAY%"
     for part in "$BACKUP_DIR/$MONGO_BACKUP_FILE".part.*; do
         [ -f "$part" ] || continue
-        FILES="$FILES,$part:/mongodb"
+        FILES="$FILES,$part:/mongodb/%YEAR%/%MONTH%/%DAY%"
     done
 
     log.info "Uploading through pbackup..."
