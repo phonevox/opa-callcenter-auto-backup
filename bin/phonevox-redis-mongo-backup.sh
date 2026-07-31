@@ -35,6 +35,50 @@ DISCORD_WEBHOOK_FILE="$CURRDIR/discord.env" # must contain DISCORD_WEBHOOK_URL, 
 # UOE (custom drive, pbackup upload destination)
 UOE_CREDENTIALS_FILE="$CURRDIR/uoe.env" # must contain UOE_URL and UOE_TOKEN, fill in after pulling
 
+# === LOGGING ===
+
+function _log() {
+    local level="$1"
+    local message="$2"
+    local muted="$3"
+
+    local level_num
+    case "$level" in
+        trace) level_num=1 ;;
+        debug) level_num=2 ;;
+        info)  level_num=3 ;;
+        warn)  level_num=4 ;;
+        error) level_num=5 ;;
+        fatal) level_num=6 ;;
+        *)     level_num=3 ;;
+    esac
+    [ "$level_num" -lt "$_LOG_LEVEL" ] && return 0
+
+    local level_upper
+    level_upper="$(printf '%s' "$level" | tr '[:lower:]' '[:upper:]')"
+
+    local line
+    line="[$(date '+%Y-%m-%d %H:%M:%S')] [$level_upper] $message"
+
+    { echo "$line" >> "$_LOG_FILE"; } 2>/dev/null
+    [ "$muted" != "muted" ] && echo "$line"
+}
+
+function log.trace() { _log trace "$1" "$2"; }
+function log.debug() { _log debug "$1" "$2"; }
+function log.info()  { _log info  "$1" "$2"; }
+function log.warn()  { _log warn  "$1" "$2"; }
+function log.error() { _log error "$1" "$2"; }
+function log.fatal() { _log fatal "$1" "$2"; }
+
+# rotate the log file if it's older than _LOG_ROTATE_PERIOD days
+if [ -f "$_LOG_FILE" ]; then
+    _log_age_days=$(( ($(date +%s) - $(stat -c %Y "$_LOG_FILE" 2>/dev/null || echo 0)) / 86400 ))
+    if [ "$_log_age_days" -ge "$_LOG_ROTATE_PERIOD" ]; then
+        { mv -f "$_LOG_FILE" "$_LOG_FILE.$(date +%Y%m%d)"; } 2>/dev/null
+    fi
+fi
+
 # === FUNCS ===
 
 log.info "=== STARTING - ARGUMENTS: $*" muted
