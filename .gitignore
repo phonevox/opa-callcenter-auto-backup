@@ -1,0 +1,21 @@
+# Credenciais preenchidas (arquivos template ja versionados, isso so previne re-add se forem removidos do index)
+bin/mongo.env
+bin/discord.env
+bin/uoe.env
+
+# Staging temporario de backup (mantem a pasta versionada via .gitkeep, ignora o conteudo)
+bin/tmp/*
+!bin/tmp/.gitkeep
+
+# OS
+.DS_Store
+
+# Editores
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+.claude
