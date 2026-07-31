@@ -24,11 +24,14 @@ REDIS_BACKUP_FILE="redisbackup-$(date +%Y%m%d%H%M%S).rdb"
 MONGO_CONTAINER="mongodb"
 MONGO_CREDENTIALS_FILE="$CURRDIR/mongo.env" # must contain MONGO_USER and MONGO_PASS, fill in after pulling
 MONGO_AUTH_DB="call-center"
-MONGO_DUMP_CONTAINER_DIR="/data/db/backup" # base path INSIDE the container
-MONGO_DUMP_HOST_DIR="/var/lib/mongodb/data/db/backup" # container bind mount, base path on the HOST
-MONGO_DUMP_NAME="mongodump-$(date +%Y%m%d%H%M%S)" # unique per-run subdirectory (avoids stale data across runs)
-MONGO_BACKUP_DIR="mongobackup-$(date +%Y%m%d%H%M%S)"
-MONGO_SPLIT_SIZE="300M" # pbackup -C: max chunk size per part, UOE rejects overly large single uploads (HTTP 400)
+MONGO_DUMP_CONTAINER_DIR="/data/db/backup" # path INSIDE the container
+MONGO_DUMP_HOST_DIR="/var/lib/mongodb/data/db/backup" # container bind mount, path on the HOST
+MONGO_ARCHIVE_NAME="mongodump-$(date +%Y%m%d%H%M%S).archive.gz"
+MONGO_BACKUP_FILE="mongobackup-$(date +%Y%m%d%H%M%S).archive.gz"
+# split (byte-level, fast, no recompression) into parts of this size before upload.
+# UOE rejects overly large single uploads (HTTP 400). Splitting ourselves avoids pbackup's
+# -a/-C autocompact, which tars+zips single-threaded and is far too slow for large dumps.
+MONGO_SPLIT_SIZE="300M"
 
 # Discord (start/finish/error notifications)
 DISCORD_WEBHOOK_FILE="$CURRDIR/discord.env" # must contain DISCORD_WEBHOOK_URL, fill in after pulling
@@ -155,26 +158,38 @@ function generate_mongo_backup() {
         exit 1
     fi
 
-    # dumped as a directory (not --archive) so pbackup can autocompact + split it (-a/-C), UOE rejects large single uploads
+    # --archive generates a single file (no leftover directory accumulating across runs)
     docker exec "$MONGO_CONTAINER" mongodump \
-        --out "$MONGO_DUMP_CONTAINER_DIR/$MONGO_DUMP_NAME" \
+        --archive="$MONGO_DUMP_CONTAINER_DIR/$MONGO_ARCHIVE_NAME" \
+        --gzip \
         -u "$MONGO_USER" \
         -p "$MONGO_PASS" \
         --authenticationDatabase "$MONGO_AUTH_DB" 2>&1
 
-    if ! [ -d "$MONGO_DUMP_HOST_DIR/$MONGO_DUMP_NAME" ]; then
-        log.fatal "ERROR: '$MONGO_DUMP_HOST_DIR/$MONGO_DUMP_NAME' was not generated! Exiting for safety reasons..."
+    if ! [ -f "$MONGO_DUMP_HOST_DIR/$MONGO_ARCHIVE_NAME" ]; then
+        log.fatal "ERROR: '$MONGO_DUMP_HOST_DIR/$MONGO_ARCHIVE_NAME' was not generated! Exiting for safety reasons..."
         exit 1
     fi
 
-    mv -f "$MONGO_DUMP_HOST_DIR/$MONGO_DUMP_NAME" "$BACKUP_DIR/$MONGO_BACKUP_DIR"
+    mv -f "$MONGO_DUMP_HOST_DIR/$MONGO_ARCHIVE_NAME" "$BACKUP_DIR/$MONGO_BACKUP_FILE"
 
-    if ! [ -d "$BACKUP_DIR/$MONGO_BACKUP_DIR" ]; then
-        log.fatal "ERROR: '$BACKUP_DIR/$MONGO_BACKUP_DIR' was not generated! Exiting for safety reasons..."
+    if ! [ -f "$BACKUP_DIR/$MONGO_BACKUP_FILE" ]; then
+        log.fatal "ERROR: '$BACKUP_DIR/$MONGO_BACKUP_FILE' was not generated! Exiting for safety reasons..."
         exit 1
     fi
 
-    log.debug "'$BACKUP_DIR/$MONGO_BACKUP_DIR' generated, proceeding..."
+    log.debug "'$BACKUP_DIR/$MONGO_BACKUP_FILE' generated, splitting into $MONGO_SPLIT_SIZE parts..."
+
+    split -b "$MONGO_SPLIT_SIZE" -d -a 3 "$BACKUP_DIR/$MONGO_BACKUP_FILE" "$BACKUP_DIR/$MONGO_BACKUP_FILE.part."
+
+    if ! ls "$BACKUP_DIR/$MONGO_BACKUP_FILE".part.* &> /dev/null; then
+        log.fatal "ERROR: splitting '$BACKUP_DIR/$MONGO_BACKUP_FILE' produced no parts! Exiting for safety reasons..."
+        exit 1
+    fi
+
+    rm -f "$BACKUP_DIR/$MONGO_BACKUP_FILE"
+
+    log.debug "MongoDB backup split into $(ls "$BACKUP_DIR/$MONGO_BACKUP_FILE".part.* | wc -l) part(s), proceeding..."
 }
 
 # === RUNTIME ===
@@ -282,10 +297,14 @@ function main () {
     generate_redis_backup
     generate_mongo_backup
 
-    FILES="$BACKUP_DIR/$REDIS_BACKUP_FILE:/redis,$BACKUP_DIR/$MONGO_BACKUP_DIR:/mongodb"
+    FILES="$BACKUP_DIR/$REDIS_BACKUP_FILE:/redis"
+    for part in "$BACKUP_DIR/$MONGO_BACKUP_FILE".part.*; do
+        [ -f "$part" ] || continue
+        FILES="$FILES,$part:/mongodb"
+    done
 
     log.info "Uploading through pbackup..."
-    pbackup --files "$FILES" -t "$UOE_URL" --token "$UOE_TOKEN" -a -C "$MONGO_SPLIT_SIZE"
+    pbackup --files "$FILES" -t "$UOE_URL" --token "$UOE_TOKEN"
     local pbackup_exit=$?
     if [ "$pbackup_exit" -ne 0 ]; then
         log.fatal "ERROR: pbackup upload failed (exit code $pbackup_exit). Local backup files were kept in '$BACKUP_DIR' for manual retry. Exiting..."
@@ -299,12 +318,12 @@ function main () {
     else
         log.error "ERROR: '$BACKUP_DIR/$REDIS_BACKUP_FILE' was not found. We aren't going to perform any delete operation in order to avoid deleting other files."
     fi
-    if [ -d "$BACKUP_DIR/$MONGO_BACKUP_DIR" ]; then
-        rm -rf "$BACKUP_DIR/$MONGO_BACKUP_DIR"
-        log.trace "- '$BACKUP_DIR/$MONGO_BACKUP_DIR' deleted."
-    else
-        log.error "ERROR: '$BACKUP_DIR/$MONGO_BACKUP_DIR' was not found. We aren't going to perform any delete operation in order to avoid deleting other files."
-    fi
+    for part in "$BACKUP_DIR/$MONGO_BACKUP_FILE".part.*; do
+        if [ -f "$part" ]; then
+            rm -f "$part"
+            log.trace "- '$part' deleted."
+        fi
+    done
     rmdir "$BACKUP_DIR" 2>/dev/null
 
     log.info "All done!"

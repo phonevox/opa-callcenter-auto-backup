@@ -27,8 +27,8 @@ Rodar manualmente sem argumentos executa o backup. O destino do upload é o driv
 
 - Antes de gerar qualquer backup, valida se `docker` e `pbackup` estão instalados, se `bin/uoe.env` está preenchido, se os containers `redis`/`mongodb` estão rodando e respondem a um `PING` (Redis) / `ping` (Mongo).
 - **Redis**: `docker exec redis redis-cli SAVE`, copia o `dump.rdb` gerado (via bind mount em `/var/lib/redis/data/dump.rdb`) com nome timestampado.
-- **MongoDB**: `docker exec mongodb mongodump --out <dir>`, autenticando com `MONGO_USER`/`MONGO_PASS`. Gera um diretório com nome timestampado por execução (nunca reaproveita nome, evita dado velho misturado com o novo).
-- Faz upload via `pbackup --files -t "$UOE_URL" --token "$UOE_TOKEN" -a -C "$MONGO_SPLIT_SIZE"` (drive UOE): `-a` autocompacta o diretório do Mongo em zip e `-C 300M` quebra em partes de até 300MB (a UOE rejeita upload único grande demais, HTTP 400 "request file too large"). Limpa o staging local (`bin/tmp/`, criado e removido a cada execução) após o envio.
+- **MongoDB**: `docker exec mongodb mongodump --archive --gzip`, autenticando com `MONGO_USER`/`MONGO_PASS`. Gera um arquivo único `.gz` por execução, depois quebra ele em partes de `$MONGO_SPLIT_SIZE` (300M) com `split -b` antes de subir - a UOE rejeita upload único grande demais (HTTP 400 "request file too large"). Usamos `split` (corte de bytes, sem recompressão) em vez do `-a`/`-C` nativo do `pbackup`, porque aquele autocompacta com `tar`+`zip` single-thread e é lento demais pra dumps grandes (trava 1 core por horas).
+- Faz upload de todas as partes via `pbackup --files -t "$UOE_URL" --token "$UOE_TOKEN"` (drive UOE) e limpa o staging local (`bin/tmp/`, criado e removido a cada execução) após o envio.
 - Notifica um webhook do Discord no início, no fim (sucesso) e em qualquer erro (via `trap ... EXIT`, cobre até falhas na validação).
 
 ### Requisitos
@@ -65,6 +65,23 @@ git update-index --skip-worktree bin/mongo.env bin/discord.env bin/uoe.env
 ```
 
 Isso faz o git ignorar futuras alterações de conteúdo desses arquivos específicos, mantendo os templates vazios intactos no histórico (os `.env.example` continuam normais, sem skip-worktree).
+
+### Restore
+
+O backup do Redis sobe como um único arquivo (`.rdb`), sem segredo pra restaurar. O do MongoDB sobe **em partes** (`mongobackup-<timestamp>.archive.gz.part.000`, `.part.001`, ...) - precisa juntar antes de restaurar:
+
+```bash
+# 1. baixe todas as partes de /mongodb pro mesmo diretório local
+
+# 2. reconstrua o .gz original (a ordem importa - os sufixos numéricos garantem isso com o wildcard)
+cat mongobackup-<timestamp>.archive.gz.part.* > mongobackup-<timestamp>.archive.gz
+
+# 3. restaure direto (mongorestore lê --gzip nativamente, não precisa descompactar à parte)
+mongorestore --archive=mongobackup-<timestamp>.archive.gz --gzip \
+    -u "$MONGO_USER" -p "$MONGO_PASS" --authenticationDatabase call-center
+```
+
+Importante: **não** dá pra usar `unzip` aqui - as partes são um corte bruto de bytes (`split -b`), não um ZIP multi-volume. Só reconstrói com `cat`, na ordem certa.
 
 ### Cron
 
