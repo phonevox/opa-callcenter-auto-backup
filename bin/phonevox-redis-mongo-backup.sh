@@ -201,6 +201,10 @@ function validations () {
         log.fatal "ERROR: You need to install pbackup! Exiting..."
         exit 1
     fi
+    if ! [ -x "/usr/sbin/pbackup" ]; then
+        log.fatal "ERROR: '/usr/sbin/pbackup' is not executable. Run 'chmod +x /usr/sbin/pbackup'. Exiting..."
+        exit 1
+    fi
 
     log.trace "Checking if rclone is installed..."
     if ! command -v rclone &> /dev/null; then
@@ -280,6 +284,11 @@ function main () {
 
     log.info "Uploading through pbackup..."
     pbackup --files "$FILES" -t "$UOE_URL" --token "$UOE_TOKEN"
+    local pbackup_exit=$?
+    if [ "$pbackup_exit" -ne 0 ]; then
+        log.fatal "ERROR: pbackup upload failed (exit code $pbackup_exit). Local backup files were kept in '$BACKUP_DIR' for manual retry. Exiting..."
+        exit 1
+    fi
 
     log.debug "Cleaning backup files from local machine..."
     for f in "$BACKUP_DIR/$REDIS_BACKUP_FILE" "$BACKUP_DIR/$MONGO_BACKUP_FILE"; do
