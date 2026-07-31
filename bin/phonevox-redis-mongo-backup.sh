@@ -37,6 +37,8 @@ UOE_CREDENTIALS_FILE="$CURRDIR/uoe.env" # must contain UOE_URL and UOE_TOKEN, fi
 
 # === LOGGING ===
 
+_LOG_TZ="America/Sao_Paulo" # log timestamps are pinned to this TZ, independent of the server's own config
+
 function _log() {
     local level="$1"
     local message="$2"
@@ -58,7 +60,7 @@ function _log() {
     level_upper="$(printf '%s' "$level" | tr '[:lower:]' '[:upper:]')"
 
     local line
-    line="[$(date '+%Y-%m-%d %H:%M:%S')] [$level_upper] $message"
+    line="[$(TZ="$_LOG_TZ" date '+%Y-%m-%d %H:%M:%S')] [$level_upper] $message"
 
     { echo "$line" >> "$_LOG_FILE"; } 2>/dev/null
     [ "$muted" != "muted" ] && echo "$line"
